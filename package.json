@@ -1,0 +1,25 @@
+{
+  "name": "newsflow-server",
+  "version": "1.0.0",
+  "description": "NewsFlow Email Newsletter Server with Open/Click Tracking",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
+  },
+  "keywords": [
+    "newsletter",
+    "email",
+    "tracking",
+    "resend"
+  ],
+  "author": "Craft Brewing Solutions",
+  "license": "MIT"
+}
