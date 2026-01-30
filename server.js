@@ -1,8 +1,8 @@
 // ============================================
 // NEWSFLOW SERVER - PRODUCTION READY
 // ============================================
-// Deploy this to Render.com for free hosting
-// with permanent webhook URL for tracking
+// Works locally AND on Render.com
+// Data persists between restarts
 // ============================================
 
 const express = require('express');
@@ -18,23 +18,39 @@ app.use(express.json({ limit: '50mb' }));
 // CONFIGURATION
 // ============================================
 
-// Resend API Key (set this in Render environment variables)
+// Resend API Key
 const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_PmCdY2sj_J4C62R2H7GkYVjYu3tf9NwQL';
 const FROM_EMAIL = process.env.FROM_EMAIL || 'newsletter@craftbrewingsolutions.com.au';
 
-// Data directory (use /tmp for Render free tier, or persistent disk for paid)
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+// Data files - saved directly in the app folder (not a subfolder)
+// This ensures they persist and are easy to find
+const SUBSCRIBERS_FILE = path.join(__dirname, 'subscribers.json');
+const CAMPAIGNS_FILE = path.join(__dirname, 'campaigns.json');
+const PENDING_BATCHES_FILE = path.join(__dirname, 'pending-batches.json');
+const TRACKING_EVENTS_FILE = path.join(__dirname, 'tracking-events.json');
 
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+// ============================================
+// INITIALIZE DATA FILES IF THEY DON'T EXIST
+// ============================================
+
+function initializeDataFiles() {
+  const files = [
+    { path: SUBSCRIBERS_FILE, default: [] },
+    { path: CAMPAIGNS_FILE, default: [] },
+    { path: PENDING_BATCHES_FILE, default: [] },
+    { path: TRACKING_EVENTS_FILE, default: [] }
+  ];
+
+  files.forEach(file => {
+    if (!fs.existsSync(file.path)) {
+      fs.writeFileSync(file.path, JSON.stringify(file.default, null, 2));
+      console.log(`📁 Created: ${path.basename(file.path)}`);
+    }
+  });
 }
 
-// File paths
-const SUBSCRIBERS_FILE = path.join(DATA_DIR, 'subscribers.json');
-const CAMPAIGNS_FILE = path.join(DATA_DIR, 'campaigns.json');
-const PENDING_BATCHES_FILE = path.join(DATA_DIR, 'pending-batches.json');
-const TRACKING_EVENTS_FILE = path.join(DATA_DIR, 'tracking-events.json');
+// Initialize on startup
+initializeDataFiles();
 
 // ============================================
 // RESEND API CLIENT
@@ -76,10 +92,11 @@ function loadFromFile(filepath, defaultValue = []) {
   try {
     if (fs.existsSync(filepath)) {
       const data = fs.readFileSync(filepath, 'utf8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      return parsed;
     }
   } catch (error) {
-    console.log('Could not load file:', filepath, error.message);
+    console.log('⚠️ Could not load file:', path.basename(filepath), error.message);
   }
   return defaultValue;
 }
@@ -87,16 +104,12 @@ function loadFromFile(filepath, defaultValue = []) {
 function saveToFile(filepath, data) {
   try {
     fs.writeFileSync(filepath, JSON.stringify(data, null, 2));
+    console.log(`💾 Saved: ${path.basename(filepath)} (${Array.isArray(data) ? data.length + ' items' : 'object'})`);
     return true;
   } catch (error) {
-    console.log('Could not save file:', filepath, error.message);
+    console.log('❌ Could not save file:', path.basename(filepath), error.message);
     return false;
   }
-}
-
-// Generate unique tracking ID for each email
-function generateTrackingId() {
-  return 'trk_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
 }
 
 // ============================================
@@ -107,7 +120,7 @@ app.get('/', (req, res) => {
   res.json({ 
     status: 'ok', 
     app: 'NewsFlow Server',
-    version: '1.0.0',
+    version: '2.0.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -122,14 +135,16 @@ app.get('/health', (req, res) => {
 
 app.get('/subscribers', (req, res) => {
   const subscribers = loadFromFile(SUBSCRIBERS_FILE, []);
-  console.log('📋 Loaded', subscribers.length, 'subscribers');
+  console.log(`📋 GET /subscribers - Loaded ${subscribers.length} subscribers`);
   res.json(subscribers);
 });
 
 app.post('/subscribers', (req, res) => {
   const { subscribers } = req.body;
+  if (!subscribers) {
+    return res.status(400).json({ success: false, error: 'No subscribers provided' });
+  }
   saveToFile(SUBSCRIBERS_FILE, subscribers);
-  console.log('✅ Saved', subscribers.length, 'subscribers');
   res.json({ success: true, count: subscribers.length });
 });
 
@@ -139,20 +154,22 @@ app.post('/subscribers', (req, res) => {
 
 app.get('/campaigns', (req, res) => {
   const campaigns = loadFromFile(CAMPAIGNS_FILE, []);
-  console.log('📊 Loaded', campaigns.length, 'campaigns');
+  console.log(`📊 GET /campaigns - Loaded ${campaigns.length} campaigns`);
   res.json(campaigns);
 });
 
 app.post('/campaigns', (req, res) => {
   const { campaigns } = req.body;
+  if (!campaigns) {
+    return res.status(400).json({ success: false, error: 'No campaigns provided' });
+  }
   saveToFile(CAMPAIGNS_FILE, campaigns);
-  console.log('✅ Saved', campaigns.length, 'campaigns');
   res.json({ success: true, count: campaigns.length });
 });
 
 app.get('/campaigns/:id', (req, res) => {
   const campaigns = loadFromFile(CAMPAIGNS_FILE, []);
-  const campaign = campaigns.find(c => c.id === parseInt(req.params.id) || c.id === req.params.id);
+  const campaign = campaigns.find(c => String(c.id) === String(req.params.id));
   if (campaign) {
     res.json(campaign);
   } else {
@@ -166,14 +183,16 @@ app.get('/campaigns/:id', (req, res) => {
 
 app.get('/pending-batches', (req, res) => {
   const batches = loadFromFile(PENDING_BATCHES_FILE, []);
-  console.log('⏳ Loaded', batches.length, 'pending batches');
+  console.log(`⏳ GET /pending-batches - Loaded ${batches.length} batches`);
   res.json(batches);
 });
 
 app.post('/pending-batches', (req, res) => {
   const { batches } = req.body;
+  if (!batches) {
+    return res.status(400).json({ success: false, error: 'No batches provided' });
+  }
   saveToFile(PENDING_BATCHES_FILE, batches);
-  console.log('✅ Saved', batches.length, 'pending batches');
   res.json({ success: true, count: batches.length });
 });
 
@@ -237,7 +256,7 @@ function recordTrackingEvent(type, campaignId, email, url = null) {
   });
   // Keep last 10000 events
   if (events.length > 10000) {
-    events.shift();
+    events.splice(0, events.length - 10000);
   }
   saveToFile(TRACKING_EVENTS_FILE, events);
 }
@@ -253,43 +272,26 @@ function updateCampaignStats(campaignId, email, eventType) {
       if (eventType === 'open' && !recipient.openedAt) {
         recipient.openedAt = new Date().toISOString();
         campaign.opened = (campaign.opened || 0) + 1;
-        console.log(`   ✅ Updated open count for campaign: ${campaign.opened}`);
+        console.log(`   ✅ Updated open count: ${campaign.opened}`);
+        saveToFile(CAMPAIGNS_FILE, campaigns);
       }
       if (eventType === 'click' && !recipient.clickedAt) {
         recipient.clickedAt = new Date().toISOString();
         campaign.clicked = (campaign.clicked || 0) + 1;
-        console.log(`   ✅ Updated click count for campaign: ${campaign.clicked}`);
+        console.log(`   ✅ Updated click count: ${campaign.clicked}`);
+        saveToFile(CAMPAIGNS_FILE, campaigns);
       }
-      saveToFile(CAMPAIGNS_FILE, campaigns);
     }
   }
 }
 
 // ============================================
-// RESEND WEBHOOK (Backup tracking method)
+// RESEND WEBHOOK (Backup tracking)
 // ============================================
 
 app.post('/webhook/resend', (req, res) => {
   const event = req.body;
-  
-  console.log('📡 Resend Webhook received:', event.type);
-  
-  try {
-    const email = event.data?.email || event.data?.to;
-    const eventType = event.type;
-    
-    if (email) {
-      if (eventType === 'email.opened') {
-        console.log(`👁️ [Webhook] Email opened by: ${email}`);
-      }
-      if (eventType === 'email.clicked') {
-        console.log(`🔗 [Webhook] Link clicked by: ${email}`);
-      }
-    }
-  } catch (error) {
-    console.log('❌ Webhook error:', error.message);
-  }
-  
+  console.log('📡 Resend Webhook:', event.type);
   res.json({ received: true });
 });
 
@@ -317,30 +319,23 @@ app.post('/send-newsletter', async (req, res) => {
   
   console.log('');
   console.log('📧 ====================================');
-  console.log(`📧 Sending newsletter to ${subscribers.length} subscribers`);
+  console.log(`📧 Sending to ${subscribers.length} subscribers`);
   console.log(`📧 Campaign ID: ${campaignId}`);
   console.log('📧 ====================================');
-  console.log('');
   
   let successCount = 0;
   let failCount = 0;
   const errors = [];
-  const sentRecipients = [];
   
   for (let i = 0; i < subscribers.length; i++) {
     const subscriber = subscribers[i];
     
     try {
-      // Add tracking pixel and wrap links for this recipient
+      // Add tracking to email
       const trackedHtml = addTrackingToEmail(html, campaignId, subscriber.email, serverUrl);
       
       await sendEmail(subscriber.email, subject, trackedHtml);
       successCount++;
-      sentRecipients.push({
-        email: subscriber.email,
-        name: subscriber.name,
-        sentAt: new Date().toISOString()
-      });
       console.log(`✅ [${i + 1}/${subscribers.length}] Sent to: ${subscriber.email}`);
     } catch (error) {
       failCount++;
@@ -348,25 +343,17 @@ app.post('/send-newsletter', async (req, res) => {
       console.log(`❌ [${i + 1}/${subscribers.length}] Failed: ${subscriber.email} - ${error.message}`);
     }
     
-    // Rate limit protection - wait 600ms between emails
+    // Rate limit protection
     if (i < subscribers.length - 1) {
       await wait(600);
     }
   }
   
   console.log('');
-  console.log('📊 ====================================');
   console.log(`📊 DONE! Sent: ${successCount}, Failed: ${failCount}`);
-  console.log('📊 ====================================');
   console.log('');
   
-  res.json({ 
-    success: true, 
-    sent: successCount, 
-    failed: failCount, 
-    errors,
-    sentRecipients
-  });
+  res.json({ success: true, sent: successCount, failed: failCount, errors });
 });
 
 // Add tracking pixel and wrap links
@@ -374,7 +361,7 @@ function addTrackingToEmail(html, campaignId, recipientEmail, serverUrl) {
   const encodedEmail = encodeURIComponent(recipientEmail);
   const baseUrl = serverUrl || process.env.SERVER_URL || 'http://localhost:3001';
   
-  // Add tracking pixel before closing </body> or at end
+  // Tracking pixel
   const trackingPixel = `<img src="${baseUrl}/track/open/${campaignId}/${encodedEmail}" width="1" height="1" style="display:none;" alt="" />`;
   
   let trackedHtml = html;
@@ -386,11 +373,10 @@ function addTrackingToEmail(html, campaignId, recipientEmail, serverUrl) {
     trackedHtml = trackedHtml + trackingPixel;
   }
   
-  // Wrap links for click tracking (except unsubscribe and mailto links)
+  // Wrap links for click tracking
   trackedHtml = trackedHtml.replace(
     /href="(https?:\/\/[^"]+)"/g,
     (match, url) => {
-      // Don't track mailto, tel, or # links
       if (url.startsWith('mailto:') || url.startsWith('tel:') || url === '#') {
         return match;
       }
@@ -406,11 +392,6 @@ function addTrackingToEmail(html, campaignId, recipientEmail, serverUrl) {
 // TRACKING STATS ENDPOINT
 // ============================================
 
-app.get('/tracking-events', (req, res) => {
-  const events = loadFromFile(TRACKING_EVENTS_FILE, []);
-  res.json(events);
-});
-
 app.get('/campaign-stats/:campaignId', (req, res) => {
   const { campaignId } = req.params;
   const events = loadFromFile(TRACKING_EVENTS_FILE, []);
@@ -420,7 +401,6 @@ app.get('/campaign-stats/:campaignId', (req, res) => {
   const opens = campaignEvents.filter(e => e.type === 'open');
   const clicks = campaignEvents.filter(e => e.type === 'click');
   
-  // Get unique opens and clicks
   const uniqueOpens = [...new Set(opens.map(e => e.email))];
   const uniqueClicks = [...new Set(clicks.map(e => e.email))];
   
@@ -431,8 +411,7 @@ app.get('/campaign-stats/:campaignId', (req, res) => {
     totalClicks: clicks.length,
     uniqueClicks: uniqueClicks.length,
     openedBy: uniqueOpens,
-    clickedBy: uniqueClicks,
-    events: campaignEvents
+    clickedBy: uniqueClicks
   });
 });
 
@@ -444,26 +423,21 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
   console.log('');
   console.log('🚀 ====================================');
-  console.log('🚀 NEWSFLOW SERVER IS RUNNING!');
+  console.log('🚀 NEWSFLOW SERVER v2.0 RUNNING!');
   console.log('🚀 ====================================');
-  console.log(`📍 Server: http://localhost:${PORT}`);
-  console.log(`📍 Health: http://localhost:${PORT}/health`);
-  console.log('');
-  console.log('✅ Subscriber management: ENABLED');
-  console.log('✅ Campaign management: ENABLED');
-  console.log('✅ Email sending: ENABLED');
-  console.log('✅ Open tracking: ENABLED');
-  console.log('✅ Click tracking: ENABLED');
-  console.log('✅ Resend webhook: ENABLED');
+  console.log(`📍 http://localhost:${PORT}`);
   console.log('');
   
+  // Show data file status
   const subs = loadFromFile(SUBSCRIBERS_FILE, []);
   const camps = loadFromFile(CAMPAIGNS_FILE, []);
   const batches = loadFromFile(PENDING_BATCHES_FILE, []);
   
-  console.log(`📋 Subscribers: ${subs.length}`);
-  console.log(`📊 Campaigns: ${camps.length}`);
-  console.log(`⏳ Pending batches: ${batches.length}`);
+  console.log('📁 Data Files:');
+  console.log(`   ✅ subscribers.json: ${subs.length} subscribers`);
+  console.log(`   ✅ campaigns.json: ${camps.length} campaigns`);
+  console.log(`   ✅ pending-batches.json: ${batches.length} pending`);
+  console.log(`   ✅ tracking-events.json: ready`);
   console.log('');
   
   if (batches.length > 0) {
@@ -471,7 +445,6 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log('');
   }
   
-  console.log('📡 Webhook URL: [YOUR_RENDER_URL]/webhook/resend');
-  console.log('   Set this in Resend dashboard for backup tracking');
+  console.log('✅ All systems ready!');
   console.log('');
 });
