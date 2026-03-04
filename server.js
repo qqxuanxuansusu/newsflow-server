@@ -230,8 +230,21 @@ app.get('/pending-batches', async (req, res) => {
 
     if (error) throw error;
 
-    console.log(`⏳ GET /pending-batches - Loaded ${data.length} batches from Supabase`);
-    res.json(data);
+    // Map DB rows back to the format the app expects
+    // The app expects: { id, subject, html, batches: [...], createdAt }
+    // We store the nested batches array in the 'subscribers' column
+    const mappedData = data.map(row => ({
+      id: row.id,
+      subject: row.subject,
+      html: row.html,
+      batches: row.subscribers || [],  // nested batches array was stored here
+      createdAt: row.created_at,
+      totalBatches: (row.subscribers || []).length,
+      sentBatches: 0
+    }));
+
+    console.log(`⏳ GET /pending-batches - Loaded ${mappedData.length} batches from Supabase`);
+    res.json(mappedData);
   } catch (error) {
     console.log('❌ Error loading pending batches:', error.message);
     res.status(500).json({ error: error.message });
@@ -247,19 +260,19 @@ app.post('/pending-batches', async (req, res) => {
 
   try {
     // Delete all existing batches and replace with new ones
-    await supabase.from('pending_batches').delete().neq('id', 0);
+    await supabase.from('pending_batches').delete().not('id', 'is', null);
 
     if (batches.length > 0) {
       const { error } = await supabase
         .from('pending_batches')
         .insert(batches.map(b => ({
-          id: b.id,
-          campaign_id: b.campaignId || b.campaign_id,
-          subscribers: b.subscribers || [],
+          id: String(b.id),
+          campaign_id: String(b.id),
+          subscribers: b.batches || [],  // store the nested batches array here
           subject: b.subject || '',
           html: b.html || '',
-          status: b.status || 'pending',
-          created_at: b.createdAt || b.created_at || new Date().toISOString()
+          status: 'pending',
+          created_at: b.createdAt || new Date().toISOString()
         })));
 
       if (error) throw error;
