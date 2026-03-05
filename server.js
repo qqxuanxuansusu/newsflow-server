@@ -109,7 +109,6 @@ app.post('/subscribers', async (req, res) => {
   }
 
   try {
-    // Upsert all subscribers (insert or update based on email)
     const { error } = await supabase
       .from('subscribers')
       .upsert(
@@ -165,7 +164,6 @@ app.post('/campaigns', async (req, res) => {
   }
 
   try {
-    // Upsert all campaigns
     const { error } = await supabase
       .from('campaigns')
       .upsert(
@@ -230,14 +228,11 @@ app.get('/pending-batches', async (req, res) => {
 
     if (error) throw error;
 
-    // Map DB rows back to the format the app expects
-    // The app expects: { id, subject, html, batches: [...], createdAt }
-    // We store the nested batches array in the 'subscribers' column
     const mappedData = data.map(row => ({
       id: row.id,
       subject: row.subject,
       html: row.html,
-      batches: row.subscribers || [],  // nested batches array was stored here
+      batches: row.subscribers || [],
       createdAt: row.created_at,
       totalBatches: (row.subscribers || []).length,
       sentBatches: 0
@@ -259,7 +254,6 @@ app.post('/pending-batches', async (req, res) => {
   }
 
   try {
-    // Delete all existing batches and replace with new ones
     await supabase.from('pending_batches').delete().not('id', 'is', null);
 
     if (batches.length > 0) {
@@ -268,7 +262,7 @@ app.post('/pending-batches', async (req, res) => {
         .insert(batches.map(b => ({
           id: String(b.id),
           campaign_id: String(b.id),
-          subscribers: b.batches || [],  // store the nested batches array here
+          subscribers: b.batches || [],
           subject: b.subject || '',
           html: b.html || '',
           status: 'pending',
@@ -290,18 +284,15 @@ app.post('/pending-batches', async (req, res) => {
 // TRACKING PIXEL & CLICK TRACKING
 // ============================================
 
-// Serve tracking pixel (1x1 transparent GIF)
 app.get('/track/open/:campaignId/:recipientEmail', async (req, res) => {
   const { campaignId, recipientEmail } = req.params;
   const email = decodeURIComponent(recipientEmail);
 
   console.log(`👁️ EMAIL OPENED: ${email} (Campaign: ${campaignId})`);
 
-  // Record the open event (fire and forget - don't block the response)
   recordTrackingEvent('open', campaignId, email).catch(console.error);
   updateCampaignStats(campaignId, email, 'open').catch(console.error);
 
-  // Return 1x1 transparent GIF immediately
   const pixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
   res.writeHead(200, {
     'Content-Type': 'image/gif',
@@ -311,7 +302,6 @@ app.get('/track/open/:campaignId/:recipientEmail', async (req, res) => {
   res.end(pixel);
 });
 
-// Track link clicks
 app.get('/track/click/:campaignId/:recipientEmail', async (req, res) => {
   const { campaignId, recipientEmail } = req.params;
   const { url } = req.query;
@@ -319,11 +309,9 @@ app.get('/track/click/:campaignId/:recipientEmail', async (req, res) => {
 
   console.log(`🔗 LINK CLICKED: ${email} clicked ${url} (Campaign: ${campaignId})`);
 
-  // Record the click event (fire and forget - don't block the redirect)
   recordTrackingEvent('click', campaignId, email, url).catch(console.error);
   updateCampaignStats(campaignId, email, 'click').catch(console.error);
 
-  // Redirect to actual URL immediately
   if (url) {
     res.redirect(decodeURIComponent(url));
   } else {
@@ -365,23 +353,15 @@ async function updateCampaignStats(campaignId, email, eventType) {
         recipient.openedAt = new Date().toISOString();
         await supabase
           .from('campaigns')
-          .update({
-            opened: (campaign.opened || 0) + 1,
-            recipients: recipients
-          })
+          .update({ opened: (campaign.opened || 0) + 1, recipients })
           .eq('id', campaignId);
-        console.log(`   ✅ Updated open count for campaign ${campaignId}`);
       }
       if (eventType === 'click' && !recipient.clickedAt) {
         recipient.clickedAt = new Date().toISOString();
         await supabase
           .from('campaigns')
-          .update({
-            clicked: (campaign.clicked || 0) + 1,
-            recipients: recipients
-          })
+          .update({ clicked: (campaign.clicked || 0) + 1, recipients })
           .eq('id', campaignId);
-        console.log(`   ✅ Updated click count for campaign ${campaignId}`);
       }
     }
   } catch (error) {
@@ -390,7 +370,7 @@ async function updateCampaignStats(campaignId, email, eventType) {
 }
 
 // ============================================
-// RESEND WEBHOOK (Backup tracking)
+// RESEND WEBHOOK
 // ============================================
 
 app.post('/webhook/resend', (req, res) => {
@@ -400,14 +380,12 @@ app.post('/webhook/resend', (req, res) => {
 });
 
 // ============================================
-// EMAIL SENDING WITH TRACKING
+// EMAIL SENDING
 // ============================================
 
 app.post('/send-email', async (req, res) => {
   const { to, subject, html } = req.body;
-
   console.log('📧 Sending test email to:', to);
-
   try {
     const data = await sendEmail(to, subject, html);
     console.log('✅ Test email sent!');
@@ -433,11 +411,8 @@ app.post('/send-newsletter', async (req, res) => {
 
   for (let i = 0; i < subscribers.length; i++) {
     const subscriber = subscribers[i];
-
     try {
-      // Add tracking to email
       const trackedHtml = addTrackingToEmail(html, campaignId, subscriber.email, serverUrl);
-
       await sendEmail(subscriber.email, subject, trackedHtml);
       successCount++;
       console.log(`✅ [${i + 1}/${subscribers.length}] Sent to: ${subscriber.email}`);
@@ -446,8 +421,6 @@ app.post('/send-newsletter', async (req, res) => {
       errors.push({ email: subscriber.email, error: error.message });
       console.log(`❌ [${i + 1}/${subscribers.length}] Failed: ${subscriber.email} - ${error.message}`);
     }
-
-    // Rate limit protection
     if (i < subscribers.length - 1) {
       await wait(600);
     }
@@ -460,24 +433,20 @@ app.post('/send-newsletter', async (req, res) => {
   res.json({ success: true, sent: successCount, failed: failCount, errors });
 });
 
-// Add tracking pixel and wrap links
 function addTrackingToEmail(html, campaignId, recipientEmail, serverUrl) {
   const encodedEmail = encodeURIComponent(recipientEmail);
   const baseUrl = serverUrl || process.env.SERVER_URL || 'http://localhost:3001';
 
-  // Tracking pixel
   const trackingPixel = `<img src="${baseUrl}/track/open/${campaignId}/${encodedEmail}" width="1" height="1" style="display:none;" alt="" />`;
 
   let trackedHtml = html;
 
-  // Insert tracking pixel
   if (trackedHtml.includes('</body>')) {
     trackedHtml = trackedHtml.replace('</body>', `${trackingPixel}</body>`);
   } else {
     trackedHtml = trackedHtml + trackingPixel;
   }
 
-  // Wrap links for click tracking
   trackedHtml = trackedHtml.replace(
     /href="(https?:\/\/[^"]+)"/g,
     (match, url) => {
@@ -491,6 +460,46 @@ function addTrackingToEmail(html, campaignId, recipientEmail, serverUrl) {
 
   return trackedHtml;
 }
+
+// ============================================
+// IMAGE UPLOAD TO SUPABASE STORAGE
+// ============================================
+
+app.post('/upload-image', async (req, res) => {
+  const { base64, filename } = req.body;
+
+  if (!base64 || !filename) {
+    return res.status(400).json({ error: 'Missing base64 or filename' });
+  }
+
+  try {
+    const matches = base64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+    if (!matches) {
+      return res.status(400).json({ error: 'Invalid base64 format' });
+    }
+
+    const contentType = matches[1];
+    const buffer = Buffer.from(matches[2], 'base64');
+    const uniqueFilename = `${Date.now()}-${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+
+    const { data, error } = await supabase.storage
+      .from('newsletter-images')
+      .upload(uniqueFilename, buffer, { contentType, upsert: false });
+
+    if (error) throw error;
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('newsletter-images')
+      .getPublicUrl(uniqueFilename);
+
+    console.log(`🖼️ Image uploaded to Supabase Storage: ${uniqueFilename}`);
+    res.json({ success: true, url: publicUrl });
+
+  } catch (error) {
+    console.log('❌ Error uploading image:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ============================================
 // TRACKING STATS ENDPOINT
@@ -509,7 +518,6 @@ app.get('/campaign-stats/:campaignId', async (req, res) => {
 
     const opens = events.filter(e => e.type === 'open');
     const clicks = events.filter(e => e.type === 'click');
-
     const uniqueOpens = [...new Set(opens.map(e => e.email))];
     const uniqueClicks = [...new Set(clicks.map(e => e.email))];
 
@@ -542,7 +550,6 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log('');
   console.log('🔌 Connecting to Supabase...');
 
-  // Test Supabase connection
   try {
     const { data, error } = await supabase.from('subscribers').select('count');
     if (error) throw error;
